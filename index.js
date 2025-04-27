@@ -54,7 +54,7 @@ app.use(
 
 // Options CORS - à ajuster selon vos besoins en production
 const corsOptions = {
-  origin: process.env.NODE_ENV === 'production' ? process.env.CLIENT_URL : '*', // Autoriser uniquement le client en prod
+  origin: process.env.NODE_ENV === 'production' ? process.env.CORS_ORIGIN : '*', // Utiliser CORS_ORIGIN défini dans les variables d'env
   methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
   credentials: true, // Important pour les cookies ou l'authentification basée sur les sessions/tokens
   optionsSuccessStatus: 204 // Pour les navigateurs plus anciens
