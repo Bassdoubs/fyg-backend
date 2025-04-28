@@ -1,17 +1,19 @@
 {
-  "name": "@fyg/shared",
+  "name": "@bassdoubs/fyg-shared",
   "version": "1.0.0",
   "description": "Types et utilitaires partagés pour Find Your Gate",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "lint": "eslint . --ext ts"
   },
   "devDependencies": {
-  },
-  "peerDependencies": {
+    "typescript": "^5.8.3"
   }
-} 
+}
