@@ -9,14 +9,13 @@ import { uploadToCloudinary, deleteFromCloudinary } from '../utils/cloudinaryUti
 // @route   GET /api/airlines
 // @access  Public (ou Private/Admin selon la politique)
 export const getAllAirlines = async (req, res) => {
+  console.log('[getAllAirlines] Received request.'); // <-- LOG 1: Entrée fonction
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 25;
     const search = req.query.search || '';
-    // Ajouter une option de tri si nécessaire (ex: ?sort=name ou ?sort=-icao)
-    // const sort = req.query.sort || 'icao'; 
-
     const skip = (page - 1) * limit;
+    console.log(`[getAllAirlines] Params: page=${page}, limit=${limit}, search='${search}'`); // <-- LOG 2: Paramètres parsés
 
     // --- Construction de la condition de recherche ---
     let queryCondition = {};
@@ -25,25 +24,15 @@ export const getAllAirlines = async (req, res) => {
     if (search) {
       const searchString = search.trim();
       if (searchString) {
-        // Utiliser l'index texte si un terme de recherche est présent
         queryCondition = { $text: { $search: searchString } };
-        // Quand on utilise $text, MongoDB trie par pertinence par défaut.
-        // On peut le rendre explicite si besoin :
-        // sortCondition = { score: { $meta: "textScore" } }; 
-        // Ou si on veut surcharger le tri par pertinence (non recommandé généralement):
-        // if (sort === 'name') sortCondition = { name: 1, score: { $meta: "textScore" } };
-        // Pour l'instant, on laisse le tri par pertinence par défaut lors d'une recherche.
         console.log(`[getAllAirlines] Using text search for: "${searchString}"`);
-      }
-    } 
-    // else {
-      // Gérer le tri explicite si pas de recherche texte (si on ajoute le paramètre `sort`)
-      // Exemple:
-      // if (sort === '-name') sortCondition = { name: -1 };
-      // else if (sort === 'name') sortCondition = { name: 1 };
-      // else if (sort === '-icao') sortCondition = { icao: -1 };
-      // else sortCondition = { icao: 1 }; // Défaut icao A-Z
-    // }
+      } else {
+        console.log('[getAllAirlines] Search param is empty, using no text search.'); // <-- LOG 2b: Search vide
+      } 
+    } else {
+       console.log('[getAllAirlines] No search param, using no text search.'); // <-- LOG 2c: Pas de search
+    }
+    console.log(`[getAllAirlines] Query Condition: ${JSON.stringify(queryCondition)}, Sort Condition: ${JSON.stringify(sortCondition)}`); // <-- LOG 3: Conditions Query/Sort
 
     // --- Exécution des requêtes ---
     const [airlines, totalCount] = await Promise.all([
@@ -51,9 +40,11 @@ export const getAllAirlines = async (req, res) => {
              .sort(sortCondition)
              .skip(skip)
              .limit(limit)
-             .lean(), // Utiliser lean() pour de meilleures performances en lecture seule
+             .lean(),
       Airline.countDocuments(queryCondition)
     ]);
+
+    console.log(`[getAllAirlines] Found ${airlines.length} airlines, total count: ${totalCount}`); // <-- LOG 4: Résultats BDD
 
     res.status(200).json({
       docs: airlines, // Renvoyer sous la clé 'docs' pour cohérence avec parkings
