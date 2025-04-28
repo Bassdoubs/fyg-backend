@@ -133,6 +133,7 @@ export const getLogs = async (req, res, next) => {
       console.error('[getLogs] Erreur lors de la récupération des logs:', findError);
       // Ne pas écraser logs, laisser vide si erreur
       // logs = []; 
+      return next(findError); // Transmettre l'erreur au gestionnaire global
     }
     
     try {
@@ -142,7 +143,8 @@ export const getLogs = async (req, res, next) => {
       console.error('[getLogs] Erreur lors du comptage des logs:', countError);
       // Si le comptage échoue, on ne peut pas calculer totalPages
       // On pourrait renvoyer une erreur ou total=0 ?
-      total = logs.length; // Approximation a minima si comptage échoue
+      // total = logs.length; // Approximation a minima si comptage échoue
+      return next(countError); // Transmettre l'erreur au gestionnaire global
     }
 
     res.json({
