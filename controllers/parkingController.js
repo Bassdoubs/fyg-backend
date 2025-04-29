@@ -38,47 +38,38 @@ export const getAllParkings = async (req, res) => {
     if (search && typeof search === 'string') {
         const searchString = search.trim();
         if (searchString) { 
-            // Utiliser l'opérateur $text qui exploitera l'index texte créé
-            matchStage.$text = { $search: searchString }; 
-            // Supprimer l'ancienne logique $or / $regex
-            /* 
-            const regex = new RegExp(searchString, 'i');
+            // Remplacer $text par $regex pour la recherche de préfixe/sous-chaîne
+            // matchStage.$text = { $search: searchString }; 
+            
+            // Utiliser $regex pour une correspondance partielle (insensible à la casse)
+            const regex = new RegExp(searchString, 'i'); 
             matchStage.$or = [
-                { airline: regex }, { airport: regex }, ... 
+                { airport: regex }, 
+                { airline: regex }
+                // Ajoutez d'autres champs si nécessaire pour la recherche partielle, 
+                // ex: { 'gate.terminal': regex }, { 'gate.porte': regex }
             ];
-            */
+            console.log(`[getAllParkings Aggregation] Using regex search:`, regex);
         }
     }
 
     // --- Construction de l'étape $sort --- 
-    let sortStage = { airport: 1 }; // Default sort (si recherche texte, MongoDB ajoute un score de pertinence par défaut)
-    // Si une recherche texte est active, MongoDB trie par défaut par pertinence ($meta: "textScore")
-    // On doit le spécifier si on veut trier par autre chose *en plus* de la recherche texte.
-    // Pour l'instant, on laisse le tri par pertinence si search est actif, OU on applique le tri demandé s'il n'y a pas de search.
-    // Une approche plus avancée combine le score ET le tri demandé.
+    let sortStage = { airport: 1 }; // Tri par défaut
     
     const sortFieldMapping = {
-       'airport': { '_id': 1 },
+       'airport': { '_id': 1 }, // Trier par l'ID groupé (aéroport)
        '-updatedAt': { 'lastUpdatedAt': -1 },
        'updatedAt': { 'lastUpdatedAt': 1 },
        '-parkingCount': { 'totalParkingsInAirport': -1 },
        'parkingCount': { 'totalParkingsInAirport': 1 },
     };
 
-    // Appliquer le tri demandé SEULEMENT s'il n'y a pas de recherche textuelle active
-    // (Sinon, on laisse MongoDB trier par pertinence par défaut)
-    if (!matchStage.$text && sort && sortFieldMapping[sort]) { 
+    // Appliquer le tri demandé seulement si la clé est valide
+    if (sort && sortFieldMapping[sort]) { 
         sortStage = sortFieldMapping[sort];
-        console.log(`[getAllParkings Aggregation] Using explicit sort stage (no text search):`, sortStage);
-    } else if (matchStage.$text) {
-        console.log(`[getAllParkings Aggregation] Text search active, using default relevance sort.`);
-        // Pour trier par pertinence explicite (optionnel, car c'est le défaut avec $text):
-        // sortStage = { score: { $meta: "textScore" } };
-        // Pour ajouter le score au document (nécessite $project):
-        // Il faudrait ajouter un $project après $match: { score: { $meta: "textScore" } } 
-        // et le passer aux étapes suivantes.
+        console.log(`[getAllParkings Aggregation] Using explicit sort stage:`, sortStage);
     } else if (sort) {
-        console.warn(`[getAllParkings Aggregation] Sort key '${sort}' not implemented or text search active, using default.`);
+        console.warn(`[getAllParkings Aggregation] Sort key '${sort}' not implemented, using default.`);
     }
     
     // --- Pipeline d'Agrégation --- 
