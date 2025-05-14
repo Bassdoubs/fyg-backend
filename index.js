@@ -2,6 +2,7 @@
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import jwt from 'jsonwebtoken';
 
 // Obtenir le chemin absolu du répertoire courant
 const __filename = fileURLToPath(import.meta.url);
@@ -91,6 +92,29 @@ app.use(express.urlencoded({ extended: true }));
 
 // Servir les fichiers uploadés statiquement
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// Endpoint pour vérifier la validité d'un JWT
+app.get('/api/auth/verify-token', (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ valid: false, message: 'Aucun token fourni' });
+  }
+  
+  try {
+    // Vérifier le token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    return res.status(200).json({ valid: true, user: decoded });
+  } catch (error) {
+    // Identifier spécifiquement les erreurs d'expiration
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({ valid: false, message: 'Token expiré', expired: true });
+    }
+    
+    // Autres erreurs JWT (token malformé, signature invalide, etc.)
+    return res.status(401).json({ valid: false, message: 'Token invalide' });
+  }
+});
 
 // API Routes
 app.use('/api/auth', authRoutes);

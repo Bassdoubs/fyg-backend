@@ -88,9 +88,17 @@ export { cleanOldLogsUtil };
 export const getLogs = async (req, res, next) => {
   try {
     const page = parseInt(req.query.page) || 0;
-    const limit = parseInt(req.query.limit) || 10;
+    let limit = parseInt(req.query.limit) || 10;
     const search = req.query.search || '';
     const period = req.query.period || 'all';
+    
+    // Paramètre spécial pour désactiver la pagination et récupérer tous les logs
+    const retrieveAll = req.query.retrieveAll === 'true';
+
+    // Désactiver la limite si on récupère tous les logs
+    if (retrieveAll && period === 'all') {
+      limit = 0; // MongoDB interprète 0 comme "pas de limite"
+    }
 
     // Filtre de période
     let dateFilter = {};
@@ -142,12 +150,16 @@ export const getLogs = async (req, res, next) => {
         'details.acars.success': 1,
       };
 
-      // Récupération des logs avec pagination et projection optimisée
-      logs = await CommandLog.find(filter, projection)
-        .sort({ timestamp: -1 })
-        .skip(page * limit) // Attention: skip attend le nombre d'éléments, pas la page
-        .limit(limit)
-        .lean(); // Utiliser lean pour de meilleures performances
+      // Création de la requête avec tri
+      const query = CommandLog.find(filter, projection).sort({ timestamp: -1 });
+      
+      // Appliquer la pagination seulement si limit > 0
+      if (limit > 0) {
+        query.skip(page * limit).limit(limit);
+      }
+
+      // Exécuter la requête
+      logs = await query.lean(); // Utiliser lean pour de meilleures performances
         
     } catch (findError) {
       console.error('[getLogs] Erreur lors de la récupération des logs:', findError);
@@ -172,7 +184,7 @@ export const getLogs = async (req, res, next) => {
       total,
       page, // Renvoyer la page actuelle demandée (0-indexed ici)
       limit, // Renvoyer la limite utilisée
-      totalPages: limit > 0 ? Math.ceil(total / limit) : 0 // Calculer le nombre total de pages
+      totalPages: limit > 0 ? Math.ceil(total / limit) : 1 // Calculer le nombre total de pages
     });
   } catch (error) {
     console.error('[getLogs] Erreur globale lors de la récupération des logs:', error);
@@ -219,11 +231,28 @@ export const deleteLog = async (req, res, next) => {
 // Fonction utilitaire pour obtenir l'historique des commandes par jour
 const getCommandUsageByDay = async (dateFilter) => {
   try {
-    let startDate = new Date();
-    startDate.setDate(startDate.getDate() - 30);
+    // Déterminer la date de début
+    let startDate;
+    
+    // Si un filtre de date est fourni, l'utiliser
     if (dateFilter?.timestamp?.$gte) {
       startDate = new Date(dateFilter.timestamp.$gte);
+    } 
+    // Sinon, il s'agit de 'all', donc chercher le log le plus ancien
+    else {
+      const oldestLog = await CommandLog.findOne({}, { timestamp: 1 })
+                               .sort({ timestamp: 1 })
+                               .lean();
+      
+      if (oldestLog) {
+        startDate = new Date(oldestLog.timestamp);
+      } else {
+        // Fallback à 30 jours si aucun log n'est trouvé
+        startDate = new Date();
+        startDate.setDate(startDate.getDate() - 30);
+      }
     }
+    
     const endDate = new Date();
     const days = [];
     for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
@@ -274,11 +303,28 @@ const getCommandUsageByDay = async (dateFilter) => {
 // Fonction utilitaire pour obtenir l'historique d'utilisation ACARS par jour
 const getAcarsUsageByDay = async (dateFilter) => {
   try {
-    let startDate = new Date();
-    startDate.setDate(startDate.getDate() - 30);
+    // Déterminer la date de début
+    let startDate;
+    
+    // Si un filtre de date est fourni, l'utiliser
     if (dateFilter?.timestamp?.$gte) {
       startDate = new Date(dateFilter.timestamp.$gte);
+    } 
+    // Sinon, il s'agit de 'all', donc chercher le log le plus ancien
+    else {
+      const oldestLog = await CommandLog.findOne({ 'details.acars.used': true }, { timestamp: 1 })
+                               .sort({ timestamp: 1 })
+                               .lean();
+      
+      if (oldestLog) {
+        startDate = new Date(oldestLog.timestamp);
+      } else {
+        // Fallback à 30 jours si aucun log n'est trouvé
+        startDate = new Date();
+        startDate.setDate(startDate.getDate() - 30);
+      }
     }
+    
     const endDate = new Date();
     const days = [];
     for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
@@ -443,6 +489,7 @@ const aggregateGlobalStats = async (dateFilter) => {
 export const getStats = async (req, res, next) => {
   try {
     const period = req.query.period || '30';
+    const retrieveAll = req.query.retrieveAll === 'true';
     let dateFilter = {};
 
     if (period !== 'all') {
@@ -457,6 +504,10 @@ export const getStats = async (req, res, next) => {
          startDate.setDate(startDate.getDate() - 30);
          dateFilter = { timestamp: { $gte: startDate } };
       }
+    } else if (retrieveAll) {
+      // Pour period=all et retrieveAll=true, on ne met aucun filtre de date
+      console.log('[getStats] Récupération de toutes les statistiques sans limite temporelle');
+      dateFilter = {}; // Filtre vide pour récupérer toute l'histoire
     }
     
     const responseStats = await aggregateGlobalStats(dateFilter);

@@ -1,6 +1,10 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js'; // Ou utiliser l'index: import { User } from '../models/index.js';
 
+// Flag pour activer/désactiver les logs détaillés d'authentification
+// Peut être contrôlé via la variable d'environnement JWT_VERBOSE_LOGS
+const VERBOSE_JWT_LOGS = process.env.JWT_VERBOSE_LOGS === 'true';
+
 // Middleware pour protéger les routes nécessitant une authentification
 export const protect = async (req, res, next) => {
   let token;
@@ -17,11 +21,18 @@ export const protect = async (req, res, next) => {
         return res.status(500).json({ message: 'Erreur de configuration serveur: JWT_SECRET non défini.' });
       }
       
-      console.log('Tentative d\'authentification JWT avec token:', token ? `${token.substring(0, 15)}...` : 'Non fourni');
+      // Log conditionnel - uniquement si le mode verbeux est activé
+      if (VERBOSE_JWT_LOGS) {
+        console.log('Tentative d\'authentification JWT avec token:', token ? `${token.substring(0, 15)}...` : 'Non fourni');
+      }
       
       // Vérifier le token
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      console.log('Token JWT vérifié avec succès, utilisateur ID:', decoded.userId);
+      
+      // Log conditionnel - uniquement si le mode verbeux est activé
+      if (VERBOSE_JWT_LOGS) {
+        console.log('Token JWT vérifié avec succès, utilisateur ID:', decoded.userId);
+      }
 
       // Trouver l'utilisateur associé au token (sans le mot de passe)
       // Et s'assurer qu'il est actif
@@ -36,6 +47,7 @@ export const protect = async (req, res, next) => {
       next();
 
     } catch (error) {
+      // Toujours logger les erreurs, même en mode non verbeux
       console.error('Erreur lors de la vérification du token JWT:', error.name, error.message);
       // Gérer les erreurs spécifiques de JWT (ex: TokenExpiredError) si besoin
       if (error.name === 'TokenExpiredError') {

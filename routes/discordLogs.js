@@ -10,11 +10,12 @@ import {
     resetStats,
     getOldestLog
 } from '../controllers/discordLogController.js';
+import { protect } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
 // Route pour déclencher manuellement le nettoyage - utilise le contrôleur
-router.post('/clean', cleanLogsController);
+router.post('/clean', protect, cleanLogsController);
 
 // Planification du nettoyage automatique (tous les jours à 3h) - utilise la fonction utilitaire importée
 cron.schedule('0 3 * * *', async () => {
@@ -27,18 +28,18 @@ cron.schedule('0 3 * * *', async () => {
 });
 
 // Route pour récupérer les logs avec pagination et recherche - utilise le contrôleur
-router.get('/', getLogs);
+router.get('/', protect, getLogs);
 
 // Route pour supprimer un log - utilise le contrôleur
-router.delete('/:id', deleteLog);
+router.delete('/:id', protect, deleteLog);
 
 // Route pour récupérer les statistiques globales - utilise le contrôleur
-router.get('/stats', getStats);
+router.get('/stats', protect, getStats);
 
 // Route pour réinitialiser les statistiques - utilise le contrôleur
-router.post('/stats/reset', resetStats);
+router.post('/stats/reset', protect, resetStats);
 
 // Route pour récupérer la date du log le plus ancien - utilise le contrôleur
-router.get('/oldest', getOldestLog);
+router.get('/oldest', protect, getOldestLog);
 
 export default router; 
