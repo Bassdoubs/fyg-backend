@@ -9,6 +9,8 @@
   "scripts": {
     "start": "node scripts/fix-deploy.js && node index.js",
     "dev": "node --watch index.js",
+    "prebuild": "npm install --no-save",
+    "build": "echo 'Build completed successfully'",
     "import-data": "node scripts/importData.js",
     "check-env": "node scripts/check-env.js",
     "create-env": "node scripts/create-env.js",
