@@ -24,6 +24,15 @@ const airlineSchema = new mongoose.Schema({
   logoPublicId: {
     type: String,
     default: null
+  },
+  // Champs pour l'audit trail
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  lastUpdatedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
   }
 }, {
   collection: 'airlines',

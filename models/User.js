@@ -32,6 +32,11 @@ const userSchema = new mongoose.Schema({
     required: true,
     default: true,
   },
+  // Champ pour l'audit trail (qui a modifié cet utilisateur en dernier)
+  lastUpdatedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }
 }, {
   timestamps: true, // Ajoute automatiquement createdAt et updatedAt
 });

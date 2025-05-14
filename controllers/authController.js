@@ -1,14 +1,14 @@
 import User from '../models/User.js';
 import jwt from 'jsonwebtoken';
+import { logActivity } from '../utils/activityLogger.js'; // Importer le logger
 // bcrypt est importé mais pas directement utilisé ici car on utilise user.comparePassword()
 
 // Fonction pour générer un token JWT
 const generateToken = (userId, username, roles) => {
   // Vérifier que la clé secrète est définie
   if (!process.env.JWT_SECRET) {
-    console.error('ERREUR FATALE: JWT_SECRET n\'est pas défini dans .env');
-    // Dans une application réelle, on pourrait arrêter le serveur ou lancer une erreur plus spécifique
-    throw new Error('Configuration serveur incomplète pour JWT.');
+    console.error('ERREUR CRITIQUE: JWT_SECRET n\'est pas défini dans les variables d\'environnement');
+    throw new Error('Configuration serveur incomplète: JWT_SECRET non défini.');
   }
 
   // Payload du token : inclure les informations nécessaires mais non sensibles
@@ -52,6 +52,8 @@ export const loginUser = async (req, res, next) => {
     // --- Vérifier si l'utilisateur existe et est actif ---
     if (!user || !user.isActive) {
       console.log(`Tentative de connexion échouée pour: ${identifier} (Utilisateur non trouvé ou inactif)`);
+      // Optionnel: Logger l'échec de connexion ? Peut être verbeux.
+      // logActivity(null, 'LOGIN_FAILURE', 'Auth', null, { identifier, reason: 'NotFoundOrInactive' });
       // Réponse générique pour ne pas indiquer si l'utilisateur existe ou non
       return res.status(401).json({ message: 'Identifiants invalides.' });
     }
@@ -61,6 +63,8 @@ export const loginUser = async (req, res, next) => {
 
     if (!isMatch) {
       console.log(`Tentative de connexion échouée pour: ${identifier} (Mot de passe incorrect)`);
+      // Optionnel: Logger l'échec de connexion
+      // logActivity(user._id, 'LOGIN_FAILURE', 'Auth', null, { reason: 'IncorrectPassword' });
       // Réponse générique
       return res.status(401).json({ message: 'Identifiants invalides.' });
     }
@@ -69,6 +73,10 @@ export const loginUser = async (req, res, next) => {
     const token = generateToken(user._id, user.username, user.roles);
 
     console.log(`Connexion réussie pour: ${user.username}`);
+
+    // Log l'activité APRÈS la réussite
+    // Ici, l'utilisateur qui fait l'action est l'utilisateur qui se connecte.
+    logActivity(user._id, 'LOGIN', 'Auth', user._id); 
 
     // --- Envoyer la réponse ---
     // Pour l'instant, on envoie le token dans le corps.
@@ -96,6 +104,12 @@ export const loginUser = async (req, res, next) => {
 // @access  Private/Admin
 export const registerUser = async (req, res, next) => {
   const { username, email, password, roles, isActive } = req.body;
+  const adminUserId = req.user?._id; // L'admin qui effectue l'enregistrement
+
+  if (!adminUserId) {
+    // Cette route devrait être protégée, donc req.user devrait exister.
+    return res.status(401).json({ message: 'Action réservée aux administrateurs connectés.' });
+  }
 
   // --- Validation basique ---
   // Une validation plus robuste avec express-validator/zod serait idéale ici
@@ -124,6 +138,10 @@ export const registerUser = async (req, res, next) => {
     const createdUser = await user.save();
 
     console.log(`Nouvel utilisateur enregistré par ${req.user.username}: ${createdUser.username}`);
+
+    // Log l'activité APRÈS la sauvegarde réussie
+    // L'admin est celui qui fait l'action, le nouvel utilisateur est la cible
+    logActivity(adminUserId, 'REGISTER', 'User', createdUser._id, { registeredUser: createdUser.username });
 
     // --- Renvoyer les informations de l'utilisateur créé (sans le mot de passe) ---
     res.status(201).json({

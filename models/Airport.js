@@ -17,7 +17,16 @@ const airportSchema = new mongoose.Schema({
   latitude: Number,
   longitude: Number,
   elevation: Number,
-  timezone: String
+  timezone: String,
+  // Champs pour l'audit trail
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  lastUpdatedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }
 }, {
   collection: 'airports',
   timestamps: true

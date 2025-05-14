@@ -13,10 +13,15 @@ export const protect = async (req, res, next) => {
 
       // Vérifier le token avec la clé secrète
       if (!process.env.JWT_SECRET) {
-        console.error('ERREUR: JWT_SECRET n\'est pas défini dans .env pour la vérification');
-        return res.status(500).json({ message: 'Configuration serveur incomplète.' });
+        console.error('ERREUR CRITIQUE: JWT_SECRET n\'est pas défini dans les variables d\'environnement');
+        return res.status(500).json({ message: 'Erreur de configuration serveur: JWT_SECRET non défini.' });
       }
+      
+      console.log('Tentative d\'authentification JWT avec token:', token ? `${token.substring(0, 15)}...` : 'Non fourni');
+      
+      // Vérifier le token
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      console.log('Token JWT vérifié avec succès, utilisateur ID:', decoded.userId);
 
       // Trouver l'utilisateur associé au token (sans le mot de passe)
       // Et s'assurer qu'il est actif
@@ -31,7 +36,7 @@ export const protect = async (req, res, next) => {
       next();
 
     } catch (error) {
-      console.error('Erreur lors de la vérification du token:', error.name, error.message);
+      console.error('Erreur lors de la vérification du token JWT:', error.name, error.message);
       // Gérer les erreurs spécifiques de JWT (ex: TokenExpiredError) si besoin
       if (error.name === 'TokenExpiredError') {
           return res.status(401).json({ message: 'Non autorisé, le token a expiré.' });

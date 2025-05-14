@@ -4,6 +4,7 @@ import Parking from '../models/Parking.js'; // Importer Parking
 // import path from 'path'; // Plus besoin
 // Importer les fonctions depuis le nouveau fichier utilitaire
 import { uploadToCloudinary, deleteFromCloudinary } from '../utils/cloudinaryUtils.js'; 
+import { logActivity } from '../utils/activityLogger.js'; // Importer le logger
 
 // @desc    Récupérer toutes les compagnies aériennes (avec pagination et recherche)
 // @route   GET /api/airlines
@@ -68,12 +69,19 @@ export const getAllAirlines = async (req, res) => {
 // @route   POST /api/airlines
 // @access  Private/Admin (à sécuriser plus tard)
 export const createAirline = async (req, res) => {
-  const { icao, name, callsign, country } = req.body;
+  const { icao: rawIcao, name, callsign, country } = req.body;
+  const userId = req.user?._id; // Récupérer l'ID utilisateur
   let cloudinaryResult = null;
 
-  if (!icao || !name || !country) {
+  if (!userId) {
+    return res.status(401).json({ message: 'Utilisateur non identifié pour logger l\'action.' });
+  }
+
+  if (!rawIcao || !name || !country) {
     return res.status(400).json({ message: 'Les champs ICAO, Nom et Pays sont requis.' });
   }
+
+  const icao = rawIcao.toUpperCase(); // Assurer la casse
 
   try {
     const existingAirline = await Airline.findOne({ icao });
@@ -92,17 +100,24 @@ export const createAirline = async (req, res) => {
       }
     }
 
-    const newAirline = new Airline({
+    const newAirlineData = {
       icao,
       name,
       callsign,
       country,
       // Utiliser les infos de Cloudinary si disponibles
       logoUrl: cloudinaryResult?.secure_url || null,
-      logoPublicId: cloudinaryResult?.public_id || null
-    });
+      logoPublicId: cloudinaryResult?.public_id || null,
+      createdBy: userId, // Assigner l'utilisateur courant
+      lastUpdatedBy: userId // Initialiser
+    };
 
+    const newAirline = new Airline(newAirlineData);
     const savedAirline = await newAirline.save();
+
+    // Log l'activité APRÈS la sauvegarde réussie
+    logActivity(userId, 'CREATE', 'Airline', savedAirline.icao, { name: savedAirline.name }); // Utiliser l'ICAO comme targetId
+
     res.status(201).json(savedAirline);
 
   } catch (error) {
@@ -148,8 +163,14 @@ export const getAirlineById = async (req, res) => {
 export const updateAirline = async (req, res) => {
   const { name, callsign, country } = req.body;
   const airlineId = req.params.id;
+  const userId = req.user?._id; // Récupérer l'ID utilisateur
   let cloudinaryResult = null;
   let oldLogoPublicId = null;
+  let logoUpdated = false; // Flag pour savoir si le logo a changé
+
+  if (!userId) {
+    return res.status(401).json({ message: 'Utilisateur non identifié pour logger l\'action.' });
+  }
 
   try {
     const airline = await Airline.findById(airlineId);
@@ -157,13 +178,16 @@ export const updateAirline = async (req, res) => {
       return res.status(404).json({ message: 'Compagnie non trouvée.' });
     }
 
-    oldLogoPublicId = airline.logoPublicId; // Sauvegarder l'ancien ID public
+    oldLogoPublicId = airline.logoPublicId; 
+    let hasChanges = false;
+    const details = { changes: [] }; 
 
-    // Si un nouveau fichier est présent, l'uploader
+    // Upload Cloudinary si nouveau fichier
     if (req.file) {
       try {
         // Utiliser l'ICAO existant comme public_id
         cloudinaryResult = await uploadToCloudinary(req.file.buffer, airline.icao);
+        logoUpdated = true;
       } catch (uploadError) {
         console.error("Erreur upload Cloudinary lors mise à jour:", uploadError);
         return res.status(500).json({ message: 'Erreur lors du téléversement du nouveau logo.', error: uploadError.message });
@@ -172,24 +196,39 @@ export const updateAirline = async (req, res) => {
       // Si le champ est explicitement vidé (pas de fichier uploadé)
       // On marque pour suppression DB et Cloudinary
       cloudinaryResult = { secure_url: null, public_id: null }; 
+      logoUpdated = true;
     }
     // Si ni fichier, ni logoUrl vide, cloudinaryResult reste null, on ne touche pas aux logos
 
-    // Mettre à jour les champs
-    airline.name = name ?? airline.name;
-    airline.callsign = callsign !== undefined ? callsign : airline.callsign;
-    airline.country = country ?? airline.country;
-    // Mettre à jour les infos logo seulement si un upload a eu lieu ou si suppression demandée
-    if (cloudinaryResult) {
-        airline.logoUrl = cloudinaryResult.secure_url;
-        airline.logoPublicId = cloudinaryResult.public_id;
+    // Mettre à jour les champs texte si différents
+    if (name !== undefined && name !== airline.name) { details.changes.push({ field: 'name', old: airline.name, new: name }); airline.name = name; hasChanges = true; }
+    if (callsign !== undefined && callsign !== airline.callsign) { details.changes.push({ field: 'callsign', old: airline.callsign, new: callsign }); airline.callsign = callsign; hasChanges = true; }
+    if (country !== undefined && country !== airline.country) { details.changes.push({ field: 'country', old: airline.country, new: country }); airline.country = country; hasChanges = true; }
+    
+    // Mettre à jour les infos logo si un changement a eu lieu
+    if (logoUpdated) {
+      if (airline.logoUrl !== cloudinaryResult.secure_url) { 
+          details.changes.push({ field: 'logoUrl', old: airline.logoUrl, new: cloudinaryResult.secure_url }); 
+          hasChanges = true; 
+      }
+      airline.logoUrl = cloudinaryResult.secure_url;
+      airline.logoPublicId = cloudinaryResult.public_id;
     }
 
+    if (!hasChanges) {
+      return res.status(200).json(airline); // Aucune modification
+    }
+
+    // Assigner l'utilisateur qui a fait la mise à jour
+    airline.lastUpdatedBy = userId;
+    
     const updatedAirline = await airline.save();
 
-    // Si mise à jour réussie ET un nouveau logo a été uploadé (ou supprimé), 
-    // ET qu'il y avait un ancien logo différent, supprimer l'ancien de Cloudinary
-    if (cloudinaryResult && oldLogoPublicId && oldLogoPublicId !== cloudinaryResult.public_id) {
+    // Log l'activité APRÈS la sauvegarde réussie
+    logActivity(userId, 'UPDATE', 'Airline', airline.icao, details); // Utiliser l'ICAO comme targetId
+
+    // Si mise à jour réussie ET logo changé, supprimer l'ancien de Cloudinary
+    if (logoUpdated && oldLogoPublicId && oldLogoPublicId !== cloudinaryResult.public_id) {
        console.log(`Tentative de suppression de l'ancien logo Cloudinary: ${oldLogoPublicId}`);
         try {
           await deleteFromCloudinary(oldLogoPublicId);
@@ -226,7 +265,12 @@ export const updateAirline = async (req, res) => {
 // @access  Private/Admin (à sécuriser plus tard)
 export const deleteAirline = async (req, res) => {
   const airlineId = req.params.id;
+  const userId = req.user?._id; // Récupérer l'ID utilisateur
   let logoPublicIdToDelete = null;
+
+  if (!userId) {
+    return res.status(401).json({ message: 'Utilisateur non identifié pour logger l\'action.' });
+  }
 
   try {
     const airline = await Airline.findById(airlineId);
@@ -234,9 +278,19 @@ export const deleteAirline = async (req, res) => {
       return res.status(404).json({ message: 'Compagnie non trouvée.' });
     }
 
-    logoPublicIdToDelete = airline.logoPublicId; // Garder l'ID public
+    // Vérifier si la compagnie est utilisée dans les parkings
+    const parkingsUsingAirline = await Parking.countDocuments({ airline: airline.icao });
+    if (parkingsUsingAirline > 0) {
+      return res.status(400).json({ message: `Cette compagnie (${airline.icao}) est utilisée par ${parkingsUsingAirline} parking(s) et ne peut pas être supprimée.` });
+    }
+
+    logoPublicIdToDelete = airline.logoPublicId;
+    const airlineIdentifier = airline.icao; // Garder l'ICAO pour le log
 
     await airline.deleteOne(); 
+
+    // Log l'activité APRÈS la suppression DB
+    logActivity(userId, 'DELETE', 'Airline', airlineId, { identifier: airlineIdentifier });
 
     // Si suppression DB réussit ET qu'il y avait un logo, supprimer de Cloudinary
     if (logoPublicIdToDelete) {
@@ -262,41 +316,51 @@ export const deleteAirline = async (req, res) => {
 // @access  Private/Admin
 export const updateAirlineLogo = async (req, res) => {
   const airlineId = req.params.id;
+  const userId = req.user?._id; // Récupérer l'ID utilisateur
   let cloudinaryResult = null;
   let oldLogoPublicId = null;
+  let oldLogoUrl = null;
 
-  // 1. Vérifier si un fichier est présent
+  if (!userId) {
+    return res.status(401).json({ message: 'Utilisateur non identifié pour logger l\'action.' });
+  }
+
   if (!req.file) {
     return res.status(400).json({ message: 'Aucun fichier de logo fourni.' });
   }
 
   try {
-    // 2. Trouver la compagnie aérienne
     const airline = await Airline.findById(airlineId);
     if (!airline) {
       return res.status(404).json({ message: 'Compagnie non trouvée.' });
     }
 
-    oldLogoPublicId = airline.logoPublicId; // Sauvegarder l'ancien ID public pour suppression éventuelle
+    oldLogoPublicId = airline.logoPublicId;
+    oldLogoUrl = airline.logoUrl;
 
-    // 3. Uploader le nouveau logo sur Cloudinary
+    // Upload nouveau logo Cloudinary
     try {
-      // Utiliser un identifiant unique basé sur l'ID et la date pour éviter les conflits de cache
       const publicId = `airline-logos/airline_${airlineId}_${Date.now()}`;
       cloudinaryResult = await uploadToCloudinary(req.file.buffer, publicId);
-      console.log('Nouveau logo uploadé sur Cloudinary:', cloudinaryResult);
     } catch (uploadError) {
       console.error("Erreur upload Cloudinary lors mise à jour logo:", uploadError);
       return res.status(500).json({ message: 'Erreur lors du téléversement du nouveau logo.', error: uploadError.message });
     }
 
-    // 4. Mettre à jour les informations du logo dans la DB
+    // Mettre à jour la DB
     airline.logoUrl = cloudinaryResult.secure_url;
     airline.logoPublicId = cloudinaryResult.public_id;
+    airline.lastUpdatedBy = userId; // Mettre à jour qui a modifié
 
     const updatedAirline = await airline.save();
 
-    // 5. Si mise à jour DB réussie ET qu'il y avait un ancien logo, supprimer l'ancien de Cloudinary
+    // Log l'activité APRÈS la sauvegarde réussie
+    logActivity(userId, 'UPDATE_LOGO', 'Airline', airline.icao, { 
+        newUrl: cloudinaryResult.secure_url, 
+        oldUrl: oldLogoUrl 
+    }); // Utiliser l'ICAO comme targetId
+
+    // Si mise à jour DB réussie ET ancien logo, supprimer l'ancien de Cloudinary
     if (oldLogoPublicId) {
        console.log(`Tentative de suppression de l'ancien logo Cloudinary: ${oldLogoPublicId}`);
         try {
@@ -308,10 +372,10 @@ export const updateAirlineLogo = async (req, res) => {
         }
     }
 
-    res.status(200).json(updatedAirline); // Renvoyer la compagnie mise à jour
+    res.status(200).json(updatedAirline); 
 
   } catch (error) {
-     // Si une erreur DB survient APRES un upload Cloudinary réussi, tenter de supprimer l'image uploadée
+     // Si erreur DB après upload, supprimer le nouveau logo Cloudinary
      if (cloudinaryResult?.public_id) {
         console.warn("Erreur DB après upload Cloudinary (logo update), tentative de suppression de l'image...");
         try {

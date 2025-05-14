@@ -22,6 +22,16 @@ const parkingSchema = new mongoose.Schema({
     hasMap: { type: Boolean, default: false },
     mapUrl: String,      // URL de la carte
     source: String       // Source de la carte
+  },
+  // Champs pour l'audit trail
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+    // Pas requis ici, car les anciens documents n'auront pas ce champ
+  },
+  lastUpdatedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
   }
 }, {
   collection: 'parkings',

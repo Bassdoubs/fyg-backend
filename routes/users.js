@@ -1,6 +1,7 @@
 import express from 'express';
 import User from '../models/User.js'; // Importer le modèle User existant
 import { protect, authorize } from '../middleware/authMiddleware.js'; // <-- Importer les middlewares
+import { logActivity } from '../utils/activityLogger.js'; // Importer le logger
 
 const router = express.Router();
 
@@ -42,7 +43,12 @@ router.post('/register', async (req, res, next) => {
     });
 
     // --- Sauvegarde --- 
-    await newUser.save();
+    const savedUser = await newUser.save();
+
+    // Log l'activité APRÈS la sauvegarde réussie
+    // L'utilisateur qui s'enregistre est à la fois l'acteur et la cible ici
+    // (ou on pourrait utiliser un ID système/null comme acteur si on préfère)
+    logActivity(savedUser._id, 'REGISTER', 'Auth', savedUser._id, { status: 'PendingValidation' }); 
 
     // --- Réponse succès --- 
     // Ne pas renvoyer le mot de passe, même haché.
@@ -97,40 +103,69 @@ router.patch(
   authorize('admin'), 
   async (req, res, next) => {
     const { roles } = req.body; // Récupérer les rôles optionnels du corps de la requête
+    const adminUserId = req.user?._id; // L'admin qui fait l'action
+    const targetUserId = req.params.id;
+
+    if (!adminUserId) {
+      return res.status(401).json({ message: 'Administrateur non identifié.' });
+    }
 
     try {
-      const user = await User.findById(req.params.id);
+      const user = await User.findById(targetUserId);
 
       if (!user) {
         return res.status(404).json({ message: 'Utilisateur non trouvé.' });
       }
 
-      // Vérifier si l'utilisateur est déjà actif
-      // if (user.isActive) {
-      //   // On pourrait permettre la modification des rôles même si déjà actif ?
-      //   // Ou renvoyer une erreur ? Pour l'instant, on se concentre sur l'activation.
-      //   // return res.status(400).json({ message: 'Ce compte est déjà actif.' }); 
-      // }
+      let hasChanges = false;
+      const details = { changes: [] };
+      const previousState = { isActive: user.isActive, roles: [...user.roles] }; // Sauvegarder l'état précédent
 
-      // Validation simple des rôles (si fournis)
+      // Mettre à jour les rôles si fournis et différents
       if (roles) {
         if (!Array.isArray(roles) || roles.some(role => !['user', 'admin', 'moderator'].includes(role))) { 
-          // Vérifie si c'est un tableau et si tous les rôles sont valides selon l'enum du modèle
           return res.status(400).json({ message: 'Rôles fournis invalides.' });
         }
-        user.roles = roles; // Assigner les nouveaux rôles
+        // Vérifier si les rôles ont réellement changé
+        if (JSON.stringify(user.roles.sort()) !== JSON.stringify(roles.sort())) {
+          details.changes.push({ field: 'roles', old: previousState.roles, new: roles });
+          user.roles = roles; 
+          hasChanges = true;
+        }
       }
       
-      user.isActive = true; // Activer l'utilisateur
-      await user.save();
+      // Activer si pas déjà actif
+      if (!user.isActive) {
+        details.changes.push({ field: 'isActive', old: false, new: true });
+        user.isActive = true; 
+        hasChanges = true;
+      }
 
-      // Ne pas renvoyer le mot de passe
-      const updatedUser = user.toObject();
-      delete updatedUser.password;
+      if (!hasChanges) {
+          // Renvoyer l'utilisateur sans modification si rien n'a changé
+          const currentUserData = user.toObject();
+          delete currentUserData.password;
+          return res.status(200).json({ 
+            message: 'Aucune modification nécessaire.', 
+            user: currentUserData 
+          });
+      }
+
+      // Assigner l'admin comme dernier modificateur
+      user.lastUpdatedBy = adminUserId;
+      const updatedUserResult = await user.save();
+
+      // Log l'activité APRÈS la sauvegarde réussie
+      // Déterminer l'action principale pour le log
+      const mainAction = !previousState.isActive ? 'VALIDATE_USER' : 'CHANGE_ROLE'; 
+      logActivity(adminUserId, mainAction, 'User', targetUserId, details);
+
+      const updatedUserResponse = updatedUserResult.toObject();
+      delete updatedUserResponse.password;
 
       res.status(200).json({ 
         message: 'Compte utilisateur activé/mis à jour avec succès.', 
-        user: updatedUser 
+        user: updatedUserResponse 
       });
 
     } catch (error) {
@@ -144,6 +179,6 @@ router.patch(
 );
 
 // TODO: Ajouter une route DELETE /api/users/:id pour rejeter/supprimer un compte ? (Admin)
-// TODO: Ajouter d'autres routes admin (GET all users, PUT update user, etc.)
+// Si ajoutée, il faudra logger l'action 'DELETE' et targetType 'User'
 
 export default router; 

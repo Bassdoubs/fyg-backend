@@ -1,5 +1,6 @@
 import Airport from '../models/Airport.js';
 import Parking from '../models/Parking.js'; // Importer le modèle Parking
+import { logActivity } from '../utils/activityLogger.js'; // Importer le logger
 
 // @desc    Récupérer tous les aéroports (avec pagination, recherche et compte parkings)
 // @route   GET /api/airports
@@ -121,30 +122,41 @@ export const getAllAirports = async (req, res) => {
 // @access  Private/Admin (à sécuriser plus tard)
 export const createAirport = async (req, res) => {
   const { icao, name, city, country, latitude, longitude, elevation, timezone } = req.body;
+  const userId = req.user?._id; // Récupérer l'ID utilisateur
 
-  // Validation simple
+  if (!userId) {
+    return res.status(401).json({ message: 'Utilisateur non identifié pour logger l\'action.' });
+  }
+
   if (!icao || !name) {
     return res.status(400).json({ message: 'Les champs ICAO et Nom sont requis.' });
   }
 
   try {
-    const existingAirport = await Airport.findOne({ icao });
+    const existingAirport = await Airport.findOne({ icao: icao.toUpperCase() }); // Assurer la casse
     if (existingAirport) {
-      return res.status(400).json({ message: `L\'aéroport avec l\'ICAO ${icao} existe déjà.` });
+      return res.status(400).json({ message: `L\'aéroport avec l\'ICAO ${icao.toUpperCase()} existe déjà.` });
     }
 
-    const newAirport = new Airport({
-      icao,
+    const newAirportData = {
+      icao: icao.toUpperCase(), // Assurer la casse
       name,
       city,
       country,
       latitude,
       longitude,
       elevation,
-      timezone
-    });
-
+      timezone,
+      createdBy: userId, // Assigner l'utilisateur courant
+      lastUpdatedBy: userId // Initialiser
+    };
+    
+    const newAirport = new Airport(newAirportData);
     const savedAirport = await newAirport.save();
+
+    // Log l'activité APRÈS la sauvegarde réussie
+    logActivity(userId, 'CREATE', 'Airport', savedAirport.icao); // Utiliser l'ICAO comme targetId ? Ou savedAirport._id
+
     res.status(201).json(savedAirport);
 
   } catch (error) {
@@ -179,6 +191,11 @@ export const getAirportById = async (req, res) => {
 export const updateAirport = async (req, res) => {
   const { icao, name, city, country, latitude, longitude, elevation, timezone } = req.body;
   const airportId = req.params.id;
+  const userId = req.user?._id; // Récupérer l'ID utilisateur
+
+  if (!userId) {
+    return res.status(401).json({ message: 'Utilisateur non identifié pour logger l\'action.' });
+  }
 
   try {
     const airport = await Airport.findById(airportId);
@@ -187,25 +204,43 @@ export const updateAirport = async (req, res) => {
       return res.status(404).json({ message: 'Aéroport non trouvé.' });
     }
 
+    let hasChanges = false;
+    const details = { changes: [] }; // Pour logger les changements
+
     // Vérifier unicité ICAO si modifié
-    if (icao && icao !== airport.icao) {
-      const existingAirportWithIcao = await Airport.findOne({ icao: icao });
+    if (icao && icao.toUpperCase() !== airport.icao) {
+      const upperIcao = icao.toUpperCase();
+      const existingAirportWithIcao = await Airport.findOne({ icao: upperIcao });
       if (existingAirportWithIcao && existingAirportWithIcao._id.toString() !== airportId) {
-        return res.status(400).json({ message: `L\'ICAO ${icao} est déjà utilisé par un autre aéroport.` });
+        return res.status(400).json({ message: `L\'ICAO ${upperIcao} est déjà utilisé par un autre aéroport.` });
       }
-      airport.icao = icao;
+      details.changes.push({ field: 'icao', old: airport.icao, new: upperIcao });
+      airport.icao = upperIcao;
+      hasChanges = true;
     }
 
-    // Mettre à jour les champs
-    airport.name = name ?? airport.name;
-    airport.city = city ?? airport.city;
-    airport.country = country ?? airport.country;
-    airport.latitude = latitude ?? airport.latitude;
-    airport.longitude = longitude ?? airport.longitude;
-    airport.elevation = elevation ?? airport.elevation;
-    airport.timezone = timezone ?? airport.timezone;
+    // Mettre à jour les autres champs si fournis et différents
+    if (name !== undefined && name !== airport.name) { details.changes.push({ field: 'name', old: airport.name, new: name }); airport.name = name; hasChanges = true; }
+    if (city !== undefined && city !== airport.city) { details.changes.push({ field: 'city', old: airport.city, new: city }); airport.city = city; hasChanges = true; }
+    if (country !== undefined && country !== airport.country) { details.changes.push({ field: 'country', old: airport.country, new: country }); airport.country = country; hasChanges = true; }
+    if (latitude !== undefined && latitude !== airport.latitude) { details.changes.push({ field: 'latitude', old: airport.latitude, new: latitude }); airport.latitude = latitude; hasChanges = true; }
+    if (longitude !== undefined && longitude !== airport.longitude) { details.changes.push({ field: 'longitude', old: airport.longitude, new: longitude }); airport.longitude = longitude; hasChanges = true; }
+    if (elevation !== undefined && elevation !== airport.elevation) { details.changes.push({ field: 'elevation', old: airport.elevation, new: elevation }); airport.elevation = elevation; hasChanges = true; }
+    if (timezone !== undefined && timezone !== airport.timezone) { details.changes.push({ field: 'timezone', old: airport.timezone, new: timezone }); airport.timezone = timezone; hasChanges = true; }
+
+    if (!hasChanges) {
+      return res.status(200).json(airport); // Aucune modification
+    }
+
+    // Assigner l'utilisateur qui a fait la mise à jour
+    airport.lastUpdatedBy = userId;
 
     const updatedAirport = await airport.save();
+
+    // Log l'activité APRÈS la sauvegarde réussie
+    // Utiliser l'_id de l'aéroport comme targetId standard
+    logActivity(userId, 'UPDATE', 'Airport', airport._id, details);
+
     res.status(200).json(updatedAirport);
 
   } catch (error) {
@@ -222,6 +257,11 @@ export const updateAirport = async (req, res) => {
 // @access  Private/Admin (à sécuriser plus tard)
 export const deleteAirport = async (req, res) => {
   const airportId = req.params.id;
+  const userId = req.user?._id; // Récupérer l'ID utilisateur
+
+  if (!userId) {
+    return res.status(401).json({ message: 'Utilisateur non identifié pour logger l\'action.' });
+  }
 
   try {
     const airport = await Airport.findById(airportId);
@@ -230,13 +270,19 @@ export const deleteAirport = async (req, res) => {
       return res.status(404).json({ message: 'Aéroport non trouvé.' });
     }
 
-    // TODO: Vérifier si l'aéroport est utilisé dans des parkings avant de supprimer ?
-    // const parkingsUsingAirport = await Parking.countDocuments({ airport: airport.icao });
-    // if (parkingsUsingAirport > 0) {
-    //   return res.status(400).json({ message: `Cet aéroport est utilisé par ${parkingsUsingAirport} parking(s) et ne peut pas être supprimé.` });
-    // }
+    // Optionnel: Vérifier si l'aéroport est utilisé dans des parkings
+    const parkingsUsingAirport = await Parking.countDocuments({ airport: airport.icao });
+    if (parkingsUsingAirport > 0) {
+       return res.status(400).json({ message: `Cet aéroport (${airport.icao}) est utilisé par ${parkingsUsingAirport} parking(s) et ne peut pas être supprimé.` });
+    }
+
+    const airportIdentifier = airport.icao || airport._id; // Garder une trace de l'ICAO/ID
 
     await airport.deleteOne();
+
+    // Log l'activité APRÈS la suppression réussie
+    logActivity(userId, 'DELETE', 'Airport', airportId, { identifier: airportIdentifier }); // Logger l'ID mongo et l'ICAO dans les détails
+
     res.status(200).json({ message: 'Aéroport supprimé avec succès.' });
 
   } catch (error) {

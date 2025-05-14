@@ -1,4 +1,5 @@
 import { CommandLog, CommandStats } from '../models/index.js';
+import { logActivity } from '../utils/activityLogger.js'; // Importer le logger
 
 // Fonction utilitaire pour nettoyer les logs plus vieux que X jours
 const cleanOldLogsUtil = async (daysToKeep = 30) => {
@@ -32,6 +33,12 @@ const cleanOldLogsUtil = async (daysToKeep = 30) => {
 
 // Contrôleur pour la route POST /api/discord-logs/clean
 export const cleanLogsController = async (req, res, next) => {
+  const adminUserId = req.user?._id; // L'admin qui effectue l'action
+
+  if (!adminUserId) {
+    return res.status(401).json({ message: 'Action réservée aux administrateurs.' });
+  }
+
   try {
     let daysToKeep = 30; // Valeur par défaut
     
@@ -48,7 +55,20 @@ export const cleanLogsController = async (req, res, next) => {
       }
     }
     
+    const cutoffDate = new Date(); // Calculer la date limite pour le log
+    cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
+    cutoffDate.setHours(0, 0, 0, 0);
+    
     const deletedCount = await cleanOldLogsUtil(daysToKeep);
+
+    // Log l'activité APRÈS l'opération
+    if (deletedCount > 0) {
+        logActivity(adminUserId, 'CLEAN_LOGS', 'DiscordLog', null, { 
+            daysKept: daysToKeep, 
+            deletedCount,
+            cutoffDate: cutoffDate.toISOString() 
+        });
+    }
     
     res.json({ 
       message: 'Nettoyage des logs effectué avec succès.',
@@ -162,26 +182,34 @@ export const getLogs = async (req, res, next) => {
 
 // Contrôleur pour la route DELETE /:id
 export const deleteLog = async (req, res, next) => {
+  const adminUserId = req.user?._id; // L'admin qui effectue l'action
+  const { id } = req.params;
+
+  if (!adminUserId) {
+    return res.status(401).json({ message: 'Action réservée aux administrateurs.' });
+  }
+
   try {
-    const { id } = req.params;
-    // Vérifier si l'ID est un ObjectId valide (optionnel mais recommandé)
     if (!id.match(/^[0-9a-fA-F]{24}$/)) {
         return res.status(400).json({ error: 'ID de log invalide.' });
     }
     
+    // Optionnel: Récupérer le log avant de le supprimer pour logger des détails
+    // const logToDelete = await CommandLog.findById(id).lean();
+    
     const result = await CommandLog.findByIdAndDelete(id);
     
     if (!result) {
-      // Si findByIdAndDelete ne trouve rien, il renvoie null
       return res.status(404).json({ error: 'Log non trouvé' });
     }
 
-    // Succès
-    res.status(200).json({ message: 'Log supprimé avec succès', id: id }); // Renvoyer 200 OK
+    // Log l'activité APRÈS la suppression réussie
+    logActivity(adminUserId, 'DELETE', 'DiscordLog', id);
+
+    res.status(200).json({ message: 'Log supprimé avec succès', id: id }); 
 
   } catch (error) {
     console.error(`[deleteLog] Erreur lors de la suppression du log ${req.params.id}:`, error);
-    // Passer l'erreur au gestionnaire global
     next(error);
   }
 };
